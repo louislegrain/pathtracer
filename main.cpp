@@ -2,6 +2,7 @@
 #include <vector>
 #include <cmath>
 #include <random>
+#include <limits>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
@@ -90,6 +91,21 @@ public:
 	// and the unit normal N
 	bool intersect(const Ray& ray, Vector& P, double &t, Vector& N) const {
 		 // TODO (lab 1) : compute the intersection (just true/false at the begining of lab 1, then P, t and N as well)
+		const Vector c = ray.O - C;
+		const double delta = pow(dot(ray.u, c), 2) - c.norm2() + pow(R, 2);
+		if (delta < 0) return false;
+
+		 for (int i = -1; i <= 1; i+=2) {
+		 	const double tmp = dot(ray.u, -1*c) + i*sqrt(delta);
+		 	if (t >= 0) {
+		 		t = tmp;
+		 		P = ray.O + t * ray.u;
+		 		N = P - C;
+		 		N.normalize();
+		 		return true;
+		 	}
+		 }
+
 		return false;
 	}
 
@@ -127,7 +143,20 @@ public:
 		// TODO (lab 1): iterate through the objects and check the intersections with all of them, 
 		// and keep the closest intersection, i.e., the one if smallest positive value of t
 
-		return false;
+		double min_val = std::numeric_limits<double>::max();
+		for (int i = 0; i < objects.size(); i++) {
+			Vector P_p, N_p;
+			double t_p;
+			if (objects[i]->intersect(ray, P_p, t_p, N_p) && t_p < min_val) {
+				min_val = t_p;
+				P = P_p;
+				t = t_p;
+				N = N_p;
+				object_id = i;
+			}
+		}
+
+		return min_val != std::numeric_limits<double>::max();
 	}
 
 
@@ -145,7 +174,10 @@ public:
 		if (intersect(ray, P, t, N, object_id)) {
 
 			if (objects[object_id]->mirror) {
-
+				const Vector i = ray.u - ray.O;
+				const Vector vec = i - 2 * dot(i, N) * N;
+				const Ray reflection(P, vec);
+				return getColor(reflection, recursion_depth+1);
 				// return getColor in the reflected direction, with recursion_depth+1 (recursively)
 			} // else
 
@@ -156,6 +188,23 @@ public:
 
 			// test if there is a shadow by sending a new ray
 			// if there is no shadow, compute the formula with dot products etc.
+
+			const Vector l_p = light_position - P;
+
+			/*const Ray shadow(P, l_p);
+			Vector P_p;
+			double t_p;
+			Vector N_p;
+			int object_id_p;
+			if (intersect(shadow,P_p, t_p, N_p, object_id_p) && (P_p - P).norm2() <= l_p.norm2()) { // shadow
+
+			}*/
+
+			const double attenuation = light_intensity / (4 * M_PI * l_p.norm2());
+			const Vector material = objects[object_id]->albedo / M_PI;
+			const double solid_angle = std::max(0., dot(N, l_p / l_p.norm()));
+
+			return attenuation * material * solid_angle;
 
 
 			// TODO (lab 2) : add indirect lighting component with a recursive call
@@ -191,11 +240,11 @@ int main() {
 	Sphere floor(Vector(0, -1000, 0), 990, Vector(0.6, 0.5, 0.7));
 
 	Scene scene;
-	scene.camera_center = Vector(0, 0, 0);
+	scene.camera_center = Vector(0, 0, 55);
 	scene.light_position = Vector(-10,20,40);
 	scene.light_intensity = 3E7;
 	scene.fov = 60 * M_PI / 180.;
-	scene.gamma = 1.0;    // TODO (lab 1) : play with gamma ; typically, gamma = 2.2
+	scene.gamma = 2.2;    // TODO (lab 1) : play with gamma ; typically, gamma = 2.2
 	scene.max_light_bounce = 5;
 
 	scene.addObject(&center_sphere);
@@ -216,8 +265,12 @@ int main() {
 		for (int j = 0; j < W; j++) {
 			Vector color;
 
-			// TODO (lab 1) : correct ray_direction so that it goes through each pixel (j, i)			
-			Vector ray_direction(0., 0., -1);
+			// TODO (lab 1) : correct ray_direction so that it goes through each pixel (j, i)
+			const double x = j - W/2 + 0.5;
+			const double y = H/2 - i - 0.5;
+			const double z = -W / (2 * tan(scene.fov / 2));
+			Vector ray_direction(x, y, z);
+			ray_direction.normalize();
 
 			Ray ray(scene.camera_center, ray_direction);
 
