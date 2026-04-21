@@ -10,6 +10,8 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
+#include <omp.h>
+
 #ifndef M_PI
 #define M_PI 3.14159265358979323856
 #endif
@@ -63,6 +65,33 @@ double dot(const Vector& a, const Vector& b) {
 }
 Vector cross(const Vector& a, const Vector& b) {
 	return Vector(a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]);
+}
+
+Vector random_cos(const Vector& N) {
+	const double r1 = uniform(engine[omp_get_thread_num()]);
+	const double r2 = uniform(engine[omp_get_thread_num()]);
+	const double x = cos(2 * M_PI * r1) * sqrt(1 - r2);
+	const double y = sin(2 * M_PI * r1) * sqrt(1 - r2);
+	const double z = sqrt(r2);
+
+	Vector T1;
+	if (fabs(N[0]) <= fabs(N[1]) && fabs(N[0]) <= fabs(N[2])) {
+		T1 = Vector(0, -N[2], N[1]);
+	} else if (fabs(N[1]) <= fabs(N[0]) && fabs(N[1]) <= fabs(N[2])) {
+		T1 = Vector(-N[2], 0, N[0]);
+	} else {
+		T1 = Vector(-N[1], N[0], 0);
+	}
+	T1.normalize();
+
+	return x * T1 + y * cross(N, T1) + z * N;
+}
+
+void boxMuller(const double stdev, double& x, double& y) {
+	const double r1 = uniform(engine[omp_get_thread_num()]);
+	const double r2 = uniform(engine[omp_get_thread_num()]);
+	x = sqrt(-2 * log(r1)) * cos(2 * M_PI * r2) * stdev;
+	y = sqrt(-2 * log(r1)) * sin(2 * M_PI * r2) * stdev;
 }
 
 class Ray {
@@ -173,41 +202,46 @@ public:
 		int object_id;
 		if (intersect(ray, P, t, N, object_id)) {
 
-			if (objects[object_id]->mirror) {
-				const Vector vec = ray.u - 2 * dot(ray.u, N) * N;
-				const Ray reflection(P, vec);
-				return getColor(reflection, recursion_depth+1);
-				// return getColor in the reflected direction, with recursion_depth+1 (recursively)
-			} // else
+		if (objects[object_id]->mirror) {
+			const Vector vec = ray.u - 2 * dot(ray.u, N) * N;
+			const Ray reflection(P + 1e-5 * N, vec);
+			return getColor(reflection, recursion_depth+1);
+			// return getColor in the reflected direction, with recursion_depth+1 (recursively)
+		} // else
 
-			if (objects[object_id]->transparent) { // optional
+		if (objects[object_id]->transparent) { // optional
 
-				// return getColor in the refraction direction, with recursion_depth+1 (recursively)
-			} // else
+			// return getColor in the refraction direction, with recursion_depth+1 (recursively)
+		} // else
 
-			// test if there is a shadow by sending a new ray
-			// if there is no shadow, compute the formula with dot products etc.
+		// test if there is a shadow by sending a new ray
+		// if there is no shadow, compute the formula with dot products etc.
 
-			const Vector l_p = light_position - P;
+		const Vector l_p = light_position - P;
+		const Vector l_dir = l_p / l_p.norm();
 
-			/*const Ray shadow(P, l_p);
-			Vector P_p;
-			double t_p;
-			Vector N_p;
-			int object_id_p;
-			if (intersect(shadow,P_p, t_p, N_p, object_id_p) && (P_p - P).norm2() <= l_p.norm2()) { // shadow
-
-			}*/
-
+		Vector direct(0, 0, 0);
+		const Ray shadow(P + 1e-5 * N, l_dir);
+		Vector P_p;
+		double t_p;
+		Vector N_p;
+		int object_id_p;
+		if (!intersect(shadow, P_p, t_p, N_p, object_id_p) || (P_p - P).norm2() > l_p.norm2()) { // shadow
 			const double attenuation = light_intensity / (4 * M_PI * l_p.norm2());
 			const Vector material = objects[object_id]->albedo / M_PI;
-			const double solid_angle = std::max(0., dot(N, l_p / l_p.norm()));
-
-			return attenuation * material * solid_angle;
-
-
-			// TODO (lab 2) : add indirect lighting component with a recursive call
+			const double solid_angle = std::max(0., dot(N, l_dir));
+			direct = attenuation * material * solid_angle;
 		}
+
+		// TODO (lab 2) : add indirect lighting component with a recursive call
+		const Vector wi = random_cos(N);
+		const Ray indirect_ray(P + 1e-5 * N, wi);
+		Vector Li = getColor(indirect_ray, recursion_depth + 1);
+		Vector rho = objects[object_id]->albedo;
+		const Vector indirect(rho[0] * Li[0], rho[1] * Li[1], rho[2] * Li[2]);
+
+		return direct + indirect;
+	}
 
 		
 
@@ -257,25 +291,42 @@ int main() {
 
 	std::vector<unsigned char> image(W * H * 3, 0);
 
+	int nb_samples = 32;
+	double focus_distance = 55.;
+	double aperture_radius = 0.5;
+
 #pragma omp parallel for schedule(dynamic, 1)
 	for (int i = 0; i < H; i++) {
 		for (int j = 0; j < W; j++) {
-			Vector color;
-
-			// TODO (lab 1) : correct ray_direction so that it goes through each pixel (j, i)
-			const double x = j - W/2 + 0.5;
-			const double y = H/2 - i - 0.5;
-			const double z = -W / (2 * tan(scene.fov / 2));
-			Vector ray_direction(x, y, z);
-			ray_direction.normalize();
-
-			Ray ray(scene.camera_center, ray_direction);
+			Vector color(0, 0, 0);
 
 			// TODO (lab 2) : add Monte Carlo / averaging of random ray contributions here
-			// TODO (lab 2) : add antialiasing by altering the ray_direction here
-			// TODO (lab 2) : add depth of field effect by altering the ray origin (and direction) here
+			for (int s = 0; s < nb_samples; s++) {
+				// TODO (lab 2) : add antialiasing by altering the ray_direction here
+				double dx, dy;
+				boxMuller(0.5, dx, dy);
 
-			color  = scene.getColor(ray, 0);
+				// TODO (lab 1) : correct ray_direction so that it goes through each pixel (j, i)
+				const double x = j - W/2 + 0.5 + dx;
+				const double y = H/2 - i - 0.5 + dy;
+				const double z = -W / (2 * tan(scene.fov / 2));
+				Vector ray_direction(x, y, z);
+				ray_direction.normalize();
+
+				// TODO (lab 2) : add depth of field effect by altering the ray origin (and direction) here
+				double r1 = uniform(engine[omp_get_thread_num()]);
+				double r2 = uniform(engine[omp_get_thread_num()]);
+				double r = aperture_radius * sqrt(r1);
+				double theta = 2 * M_PI * r2;
+				Vector focus_point = scene.camera_center + (focus_distance / std::abs(ray_direction[2])) * ray_direction;
+				Vector origin = scene.camera_center + Vector(r * cos(theta), r * sin(theta), 0);
+				ray_direction = focus_point - origin;
+				ray_direction.normalize();
+
+				Ray ray(origin, ray_direction);
+				color = color + scene.getColor(ray, 0);
+			}
+			color = color / nb_samples;
 
 			image[(i * W + j) * 3 + 0] = std::min(255., std::max(0., 255. * std::pow(color[0] / 255., 1. / scene.gamma)));
 			image[(i * W + j) * 3 + 1] = std::min(255., std::max(0., 255. * std::pow(color[1] / 255., 1. / scene.gamma)));
