@@ -97,7 +97,7 @@ public:
 
 		 for (int i = -1; i <= 1; i+=2) {
 		 	const double tmp = dot(ray.u, -1*c) + i*sqrt(delta);
-		 	if (t >= 0) {
+		 	if (tmp >= 0) {
 		 		t = tmp;
 		 		P = ray.O + t * ray.u;
 		 		N = P - C;
@@ -174,8 +174,7 @@ public:
 		if (intersect(ray, P, t, N, object_id)) {
 
 			if (objects[object_id]->mirror) {
-				const Vector i = ray.u - ray.O;
-				const Vector vec = i - 2 * dot(i, N) * N;
+				const Vector vec = ray.u - 2 * dot(ray.u, N) * N;
 				const Ray reflection(P, vec);
 				return getColor(reflection, recursion_depth+1);
 				// return getColor in the reflected direction, with recursion_depth+1 (recursively)
@@ -249,14 +248,12 @@ int main() {
 
 	scene.addObject(&center_sphere);
 
-	/*
 	scene.addObject(&wall_left);
 	scene.addObject(&wall_right);
 	scene.addObject(&wall_front);
 	scene.addObject(&wall_behind);
 	scene.addObject(&ceiling);
 	scene.addObject(&floor);
-	*/
 
 	std::vector<unsigned char> image(W * H * 3, 0);
 
