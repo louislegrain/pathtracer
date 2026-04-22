@@ -293,13 +293,64 @@ public:
 
 	// TODO ray-mesh intersection (labs 3 and 4)
 	bool intersect(const Ray& ray, Vector& P, double& t, Vector& N) const {
+		// lab 3 : once done, speed it up by first checking against the mesh bounding box
+		Vector B_min(std::numeric_limits<double>::max(), std::numeric_limits<double>::max(), std::numeric_limits<double>::max());
+		Vector B_max(std::numeric_limits<double>::min(), std::numeric_limits<double>::min(), std::numeric_limits<double>::min());
+		for (auto& vtx : vertices) {
+			for (int i = 0; i < 3; ++i) {
+				if (vtx[i] < B_min[i]) B_min[i] = vtx[i];
+				if (vtx[i] > B_max[i]) B_max[i] = vtx[i];
+			}
+		}
+
+		bool intersect = true;
+		for (int i = 0; i < 3; ++i) {
+			double t0 = B_min[i] - ray.O[i] / ray.u[i];
+			double t1 = B_max[i] - ray.O[i] / ray.u[i];
+			if (t1 < t0) {
+				const double tmp = t0;
+				t0 = t1;
+				t1 = tmp;
+			}
+
+			if (std::max(B_min[i], t0) > std::min(B_max[i], t1)) {
+				intersect = false;
+				break;
+			}
+		}
+		if (!intersect) return false;
 		
 		// lab 3 : for each triangle, compute the ray-triangle intersection with Moller-Trumbore algorithm
-		// lab 3 : once done, speed it up by first checking against the mesh bounding box
+		double min_t = std::numeric_limits<double>::max();
+
+		for (auto& idx : indices) {
+			const Vector& A = vertices[idx.vtx[0]];
+			const Vector& B = vertices[idx.vtx[1]];
+			const Vector& C = vertices[idx.vtx[2]];
+
+			Vector e1 = B - A;
+			Vector e2 = C - A;
+			N = cross(e1, e2);
+
+			const Vector A_O_u = cross((A - ray.O), ray.u);
+			const double u_N = dot(ray.u, N);
+			const double beta = dot(e2, A_O_u) / u_N;
+			const double gamma = -1 * dot(e1, A_O_u) / u_N;
+			const double alpha = 1 - beta - gamma;
+			const double local_t = dot(A - ray.O, N) / u_N;
+			if (beta < 0 || gamma < 0 || alpha < 0 || local_t < 0) continue;
+
+			if (local_t < min_t) {
+				min_t = local_t;
+				t = local_t;
+				P = alpha * A + beta * B + gamma * C;
+			}
+		}
+
 		// lab 4 : recursively apply the bounding-box test from a BVH datastructure
 
 
-		return false;
+		return min_t != std::numeric_limits<double>::max();
 	}
 
 
@@ -428,6 +479,10 @@ int main() {
 	Sphere ceiling(Vector(0, 1000, 0), 940, Vector(0.3, 0.5, 0.3));
 	Sphere floor(Vector(0, -1000, 0), 990, Vector(0.6, 0.5, 0.7));
 
+	TriangleMesh cat(Vector(0.6, 0.6, 0.6));
+	cat.readOBJ("./cat.obj");
+	cat.scale_translate(0.6, Vector(0, -10, 0));
+
 	Scene scene;
 	scene.camera_center = Vector(0, 0, 55);
 	scene.light_position = Vector(-10,20,40);
@@ -444,6 +499,8 @@ int main() {
 	scene.addObject(&wall_behind);
 	scene.addObject(&ceiling);
 	scene.addObject(&floor);
+
+	// scene.addObject(&cat);
 
 	std::vector<unsigned char> image(W * H * 3, 0);
 
