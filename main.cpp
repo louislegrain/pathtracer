@@ -164,13 +164,28 @@ public:
 // Class only used in labs 3 and 4 
 class TriangleMesh : public Object {
 public:
-	TriangleMesh(const Vector& albedo, bool mirror = false, bool transparent = false) : ::Object(albedo, mirror, transparent) {};
+	TriangleMesh(const Vector& albedo, bool mirror = false, bool transparent = false) :
+		::Object(albedo, mirror, transparent),
+		B_min(std::numeric_limits<double>::max(), std::numeric_limits<double>::max(), std::numeric_limits<double>::max()),
+		B_max(std::numeric_limits<double>::lowest(), std::numeric_limits<double>::lowest(), std::numeric_limits<double>::lowest()) {};
+
+	void compute_bbox() {
+		B_min = Vector(std::numeric_limits<double>::max(), std::numeric_limits<double>::max(), std::numeric_limits<double>::max());
+		B_max = Vector(std::numeric_limits<double>::lowest(), std::numeric_limits<double>::lowest(), std::numeric_limits<double>::lowest());
+		for (auto& vtx : vertices) {
+			for (int i = 0; i < 3; ++i) {
+				if (vtx[i] < B_min[i]) B_min[i] = vtx[i];
+				if (vtx[i] > B_max[i]) B_max[i] = vtx[i];
+			}
+		}
+	}
 
 	// first scale and then translate the current object
 	void scale_translate(double s, const Vector& t) {
 		for (int i = 0; i < vertices.size(); i++) {
 			vertices[i] = vertices[i] * s + t;
 		}
+		compute_bbox();
 	}
 
 	// read an .obj file
@@ -294,31 +309,23 @@ public:
 	// TODO ray-mesh intersection (labs 3 and 4)
 	bool intersect(const Ray& ray, Vector& P, double& t, Vector& N) const {
 		// lab 3 : once done, speed it up by first checking against the mesh bounding box
-		Vector B_min(std::numeric_limits<double>::max(), std::numeric_limits<double>::max(), std::numeric_limits<double>::max());
-		Vector B_max(std::numeric_limits<double>::min(), std::numeric_limits<double>::min(), std::numeric_limits<double>::min());
-		for (auto& vtx : vertices) {
-			for (int i = 0; i < 3; ++i) {
-				if (vtx[i] < B_min[i]) B_min[i] = vtx[i];
-				if (vtx[i] > B_max[i]) B_max[i] = vtx[i];
-			}
-		}
+		double t_min = 0.0;
+		double t_max = std::numeric_limits<double>::max();
 
-		bool intersect = true;
 		for (int i = 0; i < 3; ++i) {
-			double t0 = B_min[i] - ray.O[i] / ray.u[i];
-			double t1 = B_max[i] - ray.O[i] / ray.u[i];
+			double t0 = (B_min[i] - ray.O[i]) / ray.u[i];
+			double t1 = (B_max[i] - ray.O[i]) / ray.u[i];
 			if (t1 < t0) {
 				const double tmp = t0;
 				t0 = t1;
 				t1 = tmp;
 			}
 
-			if (std::max(B_min[i], t0) > std::min(B_max[i], t1)) {
-				intersect = false;
-				break;
-			}
+			t_min = std::max(t_min, t0);
+			t_max = std::min(t_max, t1);
 		}
-		if (!intersect) return false;
+
+		if (t_max < t_min) return false;
 		
 		// lab 3 : for each triangle, compute the ray-triangle intersection with Moller-Trumbore algorithm
 		double min_t = std::numeric_limits<double>::max();
@@ -330,20 +337,22 @@ public:
 
 			Vector e1 = B - A;
 			Vector e2 = C - A;
-			N = cross(e1, e2);
+			Vector local_N = cross(e1, e2);
 
 			const Vector A_O_u = cross((A - ray.O), ray.u);
-			const double u_N = dot(ray.u, N);
+			const double u_N = dot(ray.u, local_N);
 			const double beta = dot(e2, A_O_u) / u_N;
 			const double gamma = -1 * dot(e1, A_O_u) / u_N;
 			const double alpha = 1 - beta - gamma;
-			const double local_t = dot(A - ray.O, N) / u_N;
+			const double local_t = dot(A - ray.O, local_N) / u_N;
 			if (beta < 0 || gamma < 0 || alpha < 0 || local_t < 0) continue;
 
 			if (local_t < min_t) {
 				min_t = local_t;
 				t = local_t;
 				P = alpha * A + beta * B + gamma * C;
+				N = local_N;
+				N.normalize();
 			}
 		}
 
@@ -359,6 +368,8 @@ public:
 	std::vector<Vector> normals;
 	std::vector<Vector> uvs;
 	std::vector<Vector> vertexcolors;
+	Vector B_min;
+	Vector B_max;
 };
 
 
@@ -480,7 +491,7 @@ int main() {
 	Sphere floor(Vector(0, -1000, 0), 990, Vector(0.6, 0.5, 0.7));
 
 	TriangleMesh cat(Vector(0.6, 0.6, 0.6));
-	cat.readOBJ("./cat.obj");
+	cat.readOBJ("../cat.obj");
 	cat.scale_translate(0.6, Vector(0, -10, 0));
 
 	Scene scene;
@@ -491,7 +502,7 @@ int main() {
 	scene.gamma = 2.2;    // TODO (lab 1) : play with gamma ; typically, gamma = 2.2
 	scene.max_light_bounce = 5;
 
-	scene.addObject(&center_sphere);
+	// scene.addObject(&center_sphere);
 
 	scene.addObject(&wall_left);
 	scene.addObject(&wall_right);
@@ -500,7 +511,7 @@ int main() {
 	scene.addObject(&ceiling);
 	scene.addObject(&floor);
 
-	// scene.addObject(&cat);
+	scene.addObject(&cat);
 
 	std::vector<unsigned char> image(W * H * 3, 0);
 
