@@ -161,6 +161,15 @@ public:
 	int group;  // face group
 };
 
+struct BVHNode {
+	Vector B_min;
+	Vector B_max;
+	int left;
+	int right;
+	int start_idx;
+	int end_idx;
+};
+
 // Class only used in labs 3 and 4 
 class TriangleMesh : public Object {
 public:
@@ -186,6 +195,11 @@ public:
 			vertices[i] = vertices[i] * s + t;
 		}
 		compute_bbox();
+
+		bvh_nodes.clear();
+		if (indices.empty()) return;
+		bvh_nodes.emplace_back();
+		buildBVH(0, 0, indices.size());
 	}
 
 	// read an .obj file
@@ -306,15 +320,69 @@ public:
 	}
 	
 
-	// TODO ray-mesh intersection (labs 3 and 4)
-	bool intersect(const Ray& ray, Vector& P, double& t, Vector& N) const {
+	void buildBVH(const int node_idx, const int start, const int end) {
+		bvh_nodes[node_idx].start_idx = start;
+		bvh_nodes[node_idx].end_idx = end;
+		bvh_nodes[node_idx].left = -1;
+		bvh_nodes[node_idx].right = -1;
+		bvh_nodes[node_idx].B_min = Vector(std::numeric_limits<double>::max(), std::numeric_limits<double>::max(), std::numeric_limits<double>::max());
+		bvh_nodes[node_idx].B_max = Vector(std::numeric_limits<double>::lowest(), std::numeric_limits<double>::lowest(), std::numeric_limits<double>::lowest());
+
+		for (int i = start; i < end; ++i) {
+			for (int j = 0; j < 3; ++j) {
+				const Vector& vtx = vertices[indices[i].vtx[j]];
+				for (int k = 0; k < 3; ++k) {
+					if (vtx[k] < bvh_nodes[node_idx].B_min[k]) bvh_nodes[node_idx].B_min[k] = vtx[k];
+					if (vtx[k] > bvh_nodes[node_idx].B_max[k]) bvh_nodes[node_idx].B_max[k] = vtx[k];
+				}
+			}
+		}
+
+		if (end <= start + 4) return;
+
+		int axis = 0;
+		const double extent0 = bvh_nodes[node_idx].B_max[0] - bvh_nodes[node_idx].B_min[0];
+		const double extent1 = bvh_nodes[node_idx].B_max[1] - bvh_nodes[node_idx].B_min[1];
+		const double extent2 = bvh_nodes[node_idx].B_max[2] - bvh_nodes[node_idx].B_min[2];
+		if (extent1 > extent0 && extent1 > extent2) axis = 1;
+		if (extent2 > extent0 && extent2 > extent1) axis = 2;
+
+		const double mid = (bvh_nodes[node_idx].B_min[axis] + bvh_nodes[node_idx].B_max[axis]) / 2;
+
+		// helped by Leonard Mauvernay
+		int pivot = start;
+		for (int i = start; i < end; ++i) {
+			const double center = (vertices[indices[i].vtx[0]][axis] + vertices[indices[i].vtx[1]][axis] + vertices[indices[i].vtx[2]][axis]) / 3;
+			if (center < mid) {
+				const TriangleIndices tmp = indices[i];
+				indices[i] = indices[pivot];
+				indices[pivot] = tmp;
+				pivot++;
+			}
+		}
+		if (pivot == start || pivot == end) pivot = start + (end - start) / 2;
+		// end help
+
+		const int left = bvh_nodes.size();
+		bvh_nodes.emplace_back();
+		const int right = bvh_nodes.size();
+		bvh_nodes.emplace_back();
+
+		bvh_nodes[node_idx].left = left;
+		bvh_nodes[node_idx].right = right;
+
+		buildBVH(left, start, pivot);
+		buildBVH(right, pivot, end);
+	}
+
+	bool intersectBVH(const Ray& ray, Vector& P, double& t, Vector& N, const int node_idx) const {
 		// lab 3 : once done, speed it up by first checking against the mesh bounding box
 		double t_min = 0.0;
 		double t_max = std::numeric_limits<double>::max();
 
 		for (int i = 0; i < 3; ++i) {
-			double t0 = (B_min[i] - ray.O[i]) / ray.u[i];
-			double t1 = (B_max[i] - ray.O[i]) / ray.u[i];
+			double t0 = (bvh_nodes[node_idx].B_min[i] - ray.O[i]) / ray.u[i];
+			double t1 = (bvh_nodes[node_idx].B_max[i] - ray.O[i]) / ray.u[i];
 			if (t1 < t0) {
 				const double tmp = t0;
 				t0 = t1;
@@ -327,39 +395,49 @@ public:
 
 		if (t_max < t_min) return false;
 		
-		// lab 3 : for each triangle, compute the ray-triangle intersection with Moller-Trumbore algorithm
-		double min_t = std::numeric_limits<double>::max();
+		if (bvh_nodes[node_idx].left == -1) {
+			// lab 3 : for each triangle, compute the ray-triangle intersection with Moller-Trumbore algorithm
+			bool hit = false;
 
-		for (auto& idx : indices) {
-			const Vector& A = vertices[idx.vtx[0]];
-			const Vector& B = vertices[idx.vtx[1]];
-			const Vector& C = vertices[idx.vtx[2]];
+			for (int i = bvh_nodes[node_idx].start_idx; i < bvh_nodes[node_idx].end_idx; ++i) {
+				const Vector& A = vertices[indices[i].vtx[0]];
+				const Vector& B = vertices[indices[i].vtx[1]];
+				const Vector& C = vertices[indices[i].vtx[2]];
 
-			Vector e1 = B - A;
-			Vector e2 = C - A;
-			Vector local_N = cross(e1, e2);
+				Vector e1 = B - A;
+				Vector e2 = C - A;
+				Vector local_N = cross(e1, e2);
 
-			const Vector A_O_u = cross((A - ray.O), ray.u);
-			const double u_N = dot(ray.u, local_N);
-			const double beta = dot(e2, A_O_u) / u_N;
-			const double gamma = -1 * dot(e1, A_O_u) / u_N;
-			const double alpha = 1 - beta - gamma;
-			const double local_t = dot(A - ray.O, local_N) / u_N;
-			if (beta < 0 || gamma < 0 || alpha < 0 || local_t < 0) continue;
+				const Vector A_O_u = cross((A - ray.O), ray.u);
+				const double u_N = dot(ray.u, local_N);
+				const double beta = dot(e2, A_O_u) / u_N;
+				const double gamma = -1 * dot(e1, A_O_u) / u_N;
+				const double alpha = 1 - beta - gamma;
+				const double local_t = dot(A - ray.O, local_N) / u_N;
+				if (beta < 0 || gamma < 0 || alpha < 0 || local_t < 0) continue;
 
-			if (local_t < min_t) {
-				min_t = local_t;
-				t = local_t;
-				P = alpha * A + beta * B + gamma * C;
-				N = local_N;
-				N.normalize();
+				if (local_t < t) {
+					t = local_t;
+					P = alpha * A + beta * B + gamma * C;
+					N = local_N;
+					N.normalize();
+					hit = true;
+				}
 			}
+			return hit;
 		}
 
 		// lab 4 : recursively apply the bounding-box test from a BVH datastructure
+		const bool hit_left = intersectBVH(ray, P, t, N, bvh_nodes[node_idx].left);
+		const bool hit_right = intersectBVH(ray, P, t, N, bvh_nodes[node_idx].right);
+		return hit_left || hit_right;
+	}
 
-
-		return min_t != std::numeric_limits<double>::max();
+	// TODO ray-mesh intersection (labs 3 and 4)
+	bool intersect(const Ray& ray, Vector& P, double& t, Vector& N) const {
+		if (bvh_nodes.empty()) return false;
+		t = std::numeric_limits<double>::max();
+		return intersectBVH(ray, P, t, N, 0);
 	}
 
 
@@ -370,6 +448,7 @@ public:
 	std::vector<Vector> vertexcolors;
 	Vector B_min;
 	Vector B_max;
+	std::vector<BVHNode> bvh_nodes;
 };
 
 
