@@ -30,7 +30,7 @@ The scene loop keeps the closest hit across all objects.
 
 The direct light follows the Lambertian model:
 $
-  L
+  L_"direct"
   &= I / (4 pi d^2) rho/pi V_P (L) chevron.l N, omega_i chevron.r \
   &= I / (4 pi norm(L-P)^2) dot rho/pi dot max(0, N dot (L-P)/norm(L-P)) \
 $
@@ -71,7 +71,7 @@ Then we recursively trace a new ray from $P + epsilon N$ in this direction.
 
 The rendering equation for a diffuse surface is
 $
-  L + rho/pi integral_Omega L_i (x, omega_i) chevron.l omega_i, N chevron.r dif omega_i
+  L_"direct" + rho/pi integral_Omega L_i (x, omega_i) chevron.l omega_i, N chevron.r dif omega_i
 $
 
 
